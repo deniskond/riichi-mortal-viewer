@@ -5,6 +5,46 @@ import type { Analysis, Decision, GameSummary } from './types'
 
 type Filter = Record<'major' | 'moderate' | 'minor', boolean>
 
+// Layout override for testing: ?layout=mobile or ?layout=desktop (kept in the URL).
+const LAYOUT_PARAM = new URLSearchParams(location.search).get('layout')
+const MOBILE_SIDE_MIN = 230 // narrowest right column on mobile, px
+
+/** Phone-sized touch screen (or forced via ?layout=). Portrait gets rotated to landscape by CSS. */
+function readViewport() {
+  const w = window.innerWidth
+  const h = window.innerHeight
+  const touch = window.matchMedia('(pointer: coarse)').matches
+  const mobile = LAYOUT_PARAM === 'mobile' || (LAYOUT_PARAM !== 'desktop' && touch && Math.min(w, h) <= 600)
+  return { mobile, rotated: mobile && h > w, w, h }
+}
+
+function useViewport() {
+  const [vp, setVp] = useState(readViewport)
+  useEffect(() => {
+    const on = () => setVp((old) => {
+      const n = readViewport()
+      return n.mobile === old.mobile && n.rotated === old.rotated && n.w === old.w && n.h === old.h ? old : n
+    })
+    window.addEventListener('resize', on)
+    window.addEventListener('orientationchange', on)
+    return () => { window.removeEventListener('resize', on); window.removeEventListener('orientationchange', on) }
+  }, [])
+  return vp
+}
+
+const canFullscreen = !!document.documentElement.requestFullscreen
+
+/** Fullscreen + landscape lock (Android Chrome; iOS has no orientation lock, the CSS rotation covers it). */
+async function toggleFullscreen() {
+  try {
+    if (document.fullscreenElement) { await document.exitFullscreen(); return }
+    await document.documentElement.requestFullscreen({ navigationUI: 'hide' })
+  } catch { return }
+  try {
+    await (screen.orientation as ScreenOrientation & { lock?: (o: string) => Promise<void> }).lock?.('landscape')
+  } catch { /* not supported */ }
+}
+
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const r = await fetch(path, init)
   if (!r.ok) {
@@ -26,6 +66,7 @@ export default function App() {
   const [showHands, setShowHands] = useState(true)
   const [filter, setFilter] = useState<Filter>({ major: true, moderate: true, minor: false })
   const [zoom, setZoom] = useState(1)
+  const vp = useViewport()
 
   const refreshGames = useCallback(() => api<GameSummary[]>('/api/games').then(setGames).catch(() => {}), [])
 
@@ -47,16 +88,31 @@ export default function App() {
 
   // Fit the board column to the window: measure its unzoomed size and scale it to the space left.
   const leftRef = useRef<HTMLDivElement>(null)
+  const appRef = useRef<HTMLDivElement>(null)
   const zoomRef = useRef(1)
+  const vpRef = useRef(vp)
+  useLayoutEffect(() => { vpRef.current = vp }, [vp])
   const fit = useCallback(() => {
     const el = leftRef.current
     if (!el) return
+    const { mobile, rotated } = vpRef.current
+    // A 90° CSS rotation (mobile portrait) swaps the axes of screen rects.
+    const box = (r: DOMRect) => (rotated ? { w: r.height, h: r.width } : { w: r.width, h: r.height })
     const r = el.getBoundingClientRect()
+    const rb = box(r)
     // The table's unzoomed width is known, so its measured width tells how rects scale with zoom.
-    const table = el.querySelector('.table')?.getBoundingClientRect().width
-    const scale = table ? table / (BOARD + 2 * SIDE) : 1
-    const natW = Math.max(r.width / scale, BOARD + 2 * SIDE)
-    const natH = r.height / scale
+    const tr = el.querySelector('.table')?.getBoundingClientRect()
+    const scale = tr ? box(tr).w / (BOARD + 2 * SIDE) : 1
+    const natW = Math.max(rb.w / scale, BOARD + 2 * SIDE)
+    const natH = rb.h / scale
+    if (mobile) {
+      // Board + hand fill the full height; the right column gets the remaining width.
+      const app = appRef.current
+      if (!app) return
+      const z = Math.max(0.2, Math.min(1.6, app.clientHeight / natH, (app.clientWidth - MOBILE_SIDE_MIN) / natW))
+      if (Math.abs(z - zoomRef.current) > 0.002) { zoomRef.current = z; setZoom(z) }
+      return
+    }
     const panel = el.parentElement?.querySelector('.panel')?.getBoundingClientRect().width ?? 400
     const h = (window.innerHeight - r.top - 12) / natH
     const w = (window.innerWidth - panel - 50) / natW
@@ -83,7 +139,7 @@ export default function App() {
   }
 
   useEffect(() => {
-    if (an) history.replaceState(null, '', `?game=${an.id}&k=${ki}&f=${fi}`)
+    if (an) history.replaceState(null, '', `?game=${an.id}&k=${ki}&f=${fi}${LAYOUT_PARAM ? `&layout=${LAYOUT_PARAM}` : ''}`)
   }, [an, ki, fi])
 
   const kyoku = an?.kyokus[ki]
@@ -153,6 +209,107 @@ export default function App() {
 
   const placement = an ? 1 + an.final_scores.filter((s) => s > an.final_scores[an.player_id]).length : 0
   const curTurn = kyoku?.decisions.filter((d) => d.frame !== null && d.frame <= fi).at(-1)?.junme ?? 0
+
+  if (vp.mobile) {
+    // Board + hand fill the screen height; top bar, navigation and analysis live in the right column.
+    // Portrait: lay out at landscape size and rotate 90° clockwise into the screen.
+    const size = vp.rotated
+      ? { width: vp.h, height: vp.w, transform: `translateX(${vp.w}px) rotate(90deg)` }
+      : { width: vp.w, height: vp.h }
+    return (
+      <div className={`app mobile${vp.rotated ? ' rotated' : ''}`} ref={appRef} style={size}>
+        <div className="stage">
+          {!an && (
+            <div className="welcome">
+              <h2>Review a game with Mortal</h2>
+              <ol>
+                <li>Open <a href="https://mjai.ekyu.moe" target="_blank" rel="noreferrer">mjai.ekyu.moe</a>, paste your tenhou / Mahjong Soul log, choose the Mortal engine and submit.</li>
+                <li>When it finishes, copy the result URL from the address bar.</li>
+                <li>Paste it on the right and press <b>Analyze</b>.</li>
+              </ol>
+            </div>
+          )}
+          {an && kyoku && frame && (
+            <div className="left" ref={leftRef} style={{ zoom }}>
+              <Board an={an} kyoku={kyoku} frame={frame} showHands={showHands} />
+              <MyHand an={an} frame={frame} decisions={hereDecisions} />
+            </div>
+          )}
+        </div>
+        <div className="side">
+          <header className="m-topbar">
+            <div className="m-row">
+              <select className="games" value={an?.id ?? ''} onChange={(e) => e.target.value && openGame(e.target.value)}>
+                <option value="">Saved games ({games.length})</option>
+                {games.map((g) => (
+                  <option key={g.id} value={g.id}>
+                    #{g.place} · {g.score} · {((g.matches / g.reviewed) * 100).toFixed(0)}% · {g.mistakes.major} big
+                  </option>
+                ))}
+              </select>
+              <label className="toggle"><input type="checkbox" checked={showHands} onChange={(e) => setShowHands(e.target.checked)} /> Hands</label>
+              {canFullscreen && <button className="btn" onClick={toggleFullscreen} title="Fullscreen (locks landscape)">⛶</button>}
+            </div>
+            <div className="m-row">
+              <input
+                className="src"
+                placeholder="mjai.ekyu.moe result URL"
+                value={src}
+                onChange={(e) => setSrc(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && analyze()}
+              />
+              <button className="btn gold" onClick={analyze} disabled={busy}>{busy ? '…' : 'Analyze'}</button>
+            </div>
+          </header>
+          {err && <div className="error">{err}</div>}
+          {an && kyoku && (
+            <>
+              <nav className="m-controls">
+                <div className="m-row">
+                  <button className="btn" onClick={() => gotoKyoku(ki - 1)}>⏮</button>
+                  <select className="ctl-label" value={ki} onChange={(e) => gotoKyoku(Number(e.target.value))}>
+                    {an.kyokus.map((k, i) => <option key={i} value={i}>{k.label}</option>)}
+                  </select>
+                  <button className="btn" onClick={() => gotoKyoku(ki + 1)}>⏭</button>
+                </div>
+                <div className="m-row">
+                  <button className="btn" onClick={() => stepDecision(-1)}>⏪</button>
+                  <span className="ctl-label">T{curTurn}</span>
+                  <button className="btn" onClick={() => stepDecision(1)}>⏩</button>
+                  <button className="btn" onClick={() => step(-1)}>◀</button>
+                  <span className="muted small m-frame">{fi + 1}/{kyoku.frames.length}</span>
+                  <button className="btn" onClick={() => step(1)}>▶</button>
+                </div>
+                <div className="m-row">
+                  <button className="btn" onClick={() => stepMistake(-1)}>◀ Mistake</button>
+                  <button className="btn gold" onClick={() => stepMistake(1)}>Mistake ▶</button>
+                </div>
+                <div className="timeline">
+                  {kyoku.decisions.filter((d) => d.frame !== null).map((d) => (
+                    <button
+                      key={d.id}
+                      className={`tl sev-${d.severity}${d.frame === fi ? ' current' : ''}`}
+                      onClick={() => jump(d)}
+                    />
+                  ))}
+                </div>
+              </nav>
+              <Panel
+                an={an}
+                decisions={hereDecisions}
+                mistakes={mistakes}
+                currentId={hereDecisions[0]?.id ?? null}
+                onJump={jump}
+                filter={filter}
+                setFilter={setFilter}
+                placement={placement}
+              />
+            </>
+          )}
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div className="app">

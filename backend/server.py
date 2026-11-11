@@ -6,15 +6,34 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 
 from fastapi import FastAPI, HTTPException
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from mjanalyzer.__main__ import DATA, run
+from mjanalyzer.__main__ import DATA, REPO, run
 from mjanalyzer.report import ReportError, report_id
 
 app = FastAPI(title="Mahjong analyzer")
 ANALYSES = os.path.join(DATA, "analyses")
+SEED = os.path.join(REPO, "seed", "analyses")
+FRONTEND = os.environ.get("FRONTEND_DIST") or os.path.join(REPO, "frontend", "dist")
+
+
+def _seed_analyses() -> None:
+    """Copy committed seed analyses into DATA (Render has no persistent disk)."""
+    os.makedirs(ANALYSES, exist_ok=True)
+    os.makedirs(os.path.join(DATA, "reports"), exist_ok=True)
+    if not os.path.isdir(SEED):
+        return
+    for fn in os.listdir(SEED):
+        dst = os.path.join(ANALYSES, fn)
+        if fn.endswith(".json") and not os.path.exists(dst):
+            shutil.copy2(os.path.join(SEED, fn), dst)
+
+
+_seed_analyses()
 
 
 class AnalyzeRequest(BaseModel):
@@ -57,3 +76,9 @@ def game(gid: str):
         raise HTTPException(404, "Game not analyzed yet")
     with open(path, encoding="utf-8") as f:
         return json.load(f)
+
+
+# Serve the built React app (production). Mounted last so /api/* routes win.
+# Skipped in local development, where Vite serves the frontend and proxies /api.
+if os.path.isdir(FRONTEND):
+    app.mount("/", StaticFiles(directory=FRONTEND, html=True), name="frontend")

@@ -30,6 +30,36 @@ cd backend;  py -3.11 -m venv .venv; .\.venv\Scripts\pip install -r requirements
 cd frontend; npm install
 ```
 
+## Deploy (Render, free plan)
+
+One Docker web service serves both the API and the built frontend
+(`Dockerfile` at the repo root: Node builds `frontend/dist`, then a Python image runs uvicorn).
+Render redeploys on every push to the connected GitHub branch.
+
+1. Sign up at https://render.com with GitHub.
+2. **New → Web Service** → pick this repo → Render detects the `Dockerfile` → instance type **Free**.
+   (Or **New → Blueprint**, which reads `render.yaml`.)
+3. Open `https://<name>.onrender.com/`.
+
+Free-plan limits:
+
+- The service sleeps after ~15 min idle; the first request then takes ~30–60 s.
+- No persistent disk: analyses created on Render are lost on every restart / redeploy.
+- Public: anyone with the link can run Analyze and see the game list (including opponents' nicknames).
+
+**Seed analyses** – to ship games with every deploy, copy `data/analyses/<id>.json`
+(not `.mistakes.md`, not `data/reports/`) into `seed/analyses/`, commit and push.
+On startup the server copies any seed file that is not already in the data folder.
+
+Environment variables:
+
+- `DATA_DIR` – data folder (default `<repo>/data`; the Docker image uses `/app/data`).
+- `FRONTEND_DIST` – built frontend to serve at `/` (default `<repo>/frontend/dist`;
+  if the folder does not exist, nothing is served at `/`, as in local development).
+
+Production-like local run: `cd frontend; npm run build`, then start uvicorn and open
+http://localhost:8000/. Or `docker build -t mahjong .; docker run -p 8000:8000 mahjong`.
+
 ## Layout
 
 - `backend/mjanalyzer/report.py` – fetch/cached Mortal report JSON

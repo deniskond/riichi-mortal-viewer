@@ -10,7 +10,8 @@ from .analyze import analyze
 from .describe import describe
 from .report import ReportError, load_report
 
-DATA = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "data")
+REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+DATA = os.environ.get("DATA_DIR") or os.path.join(REPO, "data")
 
 
 def run(src: str, data_dir: str = DATA) -> dict:

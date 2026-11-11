@@ -1,0 +1,6 @@
+services:
+  - type: web
+    name: mahjong-review
+    runtime: docker
+    plan: free
+    healthCheckPath: /api/games
