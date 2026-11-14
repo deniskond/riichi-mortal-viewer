@@ -8,28 +8,49 @@ type Filter = Record<'major' | 'moderate' | 'minor', boolean>
 // Layout override for testing: ?layout=mobile or ?layout=desktop (kept in the URL).
 const LAYOUT_PARAM = new URLSearchParams(location.search).get('layout')
 const MOBILE_SIDE_MIN = 230 // narrowest right column on mobile, px
+const PANEL_W = 400 // desktop analysis panel width, px (matches .panel in index.css)
+const PANEL_GAP = 14 // min gap between the centered board column and the panel, px
+const PAGE_PAD = 14 // page side padding, px
+const MAX_ZOOM = 1.6
 
-/** Phone-sized touch screen (or forced via ?layout=). Portrait gets rotated to landscape by CSS. */
+// Desktop board column metrics, refined by measurement while the desktop layout is shown.
+// natH only grows so the layout doesn't flip back and forth between hands.
+const desk = { natW: BOARD + 2 * SIDE, natH: 980, top: 52 }
+
+/** Zoom that fits the desktop board column to the window height. */
+function deskZoom(h: number) {
+  return Math.max(0.3, Math.min(MAX_ZOOM, (h - desk.top - 12) / desk.natH))
+}
+
+/** Desktop layout works when the height-fitted board, centered, doesn't reach the right-aligned panel. */
+function desktopFits(w: number, h: number) {
+  const half = (desk.natW * deskZoom(h)) / 2
+  return half + PANEL_GAP + PANEL_W + PAGE_PAD <= w / 2
+}
+
+/** Phone-sized touch screen, a window too narrow for the desktop layout, or forced via ?layout=.
+ *  Touch portrait gets rotated to landscape by CSS. */
 function readViewport() {
   const w = window.innerWidth
   const h = window.innerHeight
   const touch = window.matchMedia('(pointer: coarse)').matches
-  const mobile = LAYOUT_PARAM === 'mobile' || (LAYOUT_PARAM !== 'desktop' && touch && Math.min(w, h) <= 600)
-  return { mobile, rotated: mobile && h > w, w, h }
+  const mobile = LAYOUT_PARAM === 'mobile' || (LAYOUT_PARAM !== 'desktop' &&
+    ((touch && Math.min(w, h) <= 600) || !desktopFits(document.documentElement.clientWidth || w, h)))
+  return { mobile, rotated: mobile && touch && h > w, w, h }
 }
 
 function useViewport() {
   const [vp, setVp] = useState(readViewport)
+  const recheck = useCallback(() => setVp((old) => {
+    const n = readViewport()
+    return n.mobile === old.mobile && n.rotated === old.rotated && n.w === old.w && n.h === old.h ? old : n
+  }), [])
   useEffect(() => {
-    const on = () => setVp((old) => {
-      const n = readViewport()
-      return n.mobile === old.mobile && n.rotated === old.rotated && n.w === old.w && n.h === old.h ? old : n
-    })
-    window.addEventListener('resize', on)
-    window.addEventListener('orientationchange', on)
-    return () => { window.removeEventListener('resize', on); window.removeEventListener('orientationchange', on) }
-  }, [])
-  return vp
+    window.addEventListener('resize', recheck)
+    window.addEventListener('orientationchange', recheck)
+    return () => { window.removeEventListener('resize', recheck); window.removeEventListener('orientationchange', recheck) }
+  }, [recheck])
+  return [vp, recheck] as const
 }
 
 const canFullscreen = !!document.documentElement.requestFullscreen
@@ -66,7 +87,7 @@ export default function App() {
   const [showHands, setShowHands] = useState(true)
   const [filter, setFilter] = useState<Filter>({ major: true, moderate: true, minor: false })
   const [zoom, setZoom] = useState(1)
-  const vp = useViewport()
+  const [vp, recheckViewport] = useViewport()
 
   const refreshGames = useCallback(() => api<GameSummary[]>('/api/games').then(setGames).catch(() => {}), [])
 
@@ -109,16 +130,19 @@ export default function App() {
       // Board + hand fill the full height; the right column gets the remaining width.
       const app = appRef.current
       if (!app) return
-      const z = Math.max(0.2, Math.min(1.6, app.clientHeight / natH, (app.clientWidth - MOBILE_SIDE_MIN) / natW))
+      const z = Math.max(0.2, Math.min(MAX_ZOOM, app.clientHeight / natH, (app.clientWidth - MOBILE_SIDE_MIN) / natW))
       if (Math.abs(z - zoomRef.current) > 0.002) { zoomRef.current = z; setZoom(z) }
       return
     }
-    const panel = el.parentElement?.querySelector('.panel')?.getBoundingClientRect().width ?? 400
-    const h = (window.innerHeight - r.top - 12) / natH
-    const w = (window.innerWidth - panel - 50) / natW
-    const z = Math.max(0.5, Math.min(1.6, h, w))
+    // Desktop: the board column is centered and sized to the height; the panel sits at the right edge.
+    // If they would overlap, recheckViewport() switches to the mobile layout.
+    desk.natH = Math.max(desk.natH, natH)
+    desk.natW = natW
+    desk.top = r.top
+    const z = deskZoom(window.innerHeight)
     if (Math.abs(z - zoomRef.current) > 0.002) { zoomRef.current = z; setZoom(z) }
-  }, [])
+    recheckViewport()
+  }, [recheckViewport])
   useLayoutEffect(() => {
     fit()
     window.addEventListener('resize', fit)

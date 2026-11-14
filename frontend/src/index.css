@@ -53,8 +53,12 @@ a { color: var(--cyan); }
 .welcome { max-width: 640px; margin: 60px auto; background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 20px 28px; line-height: 1.7; }
 
 /* ---------- layout ---------- */
-.main { display: flex; gap: 14px; padding: 10px 14px; align-items: flex-start; justify-content: center; }
+.main { position: relative; padding: 10px 14px; }
 .left { display: flex; flex-direction: column; align-items: center; gap: 6px; }
+/* Desktop: board column centered on the page, analysis panel pinned to the right edge.
+   App.tsx switches to the mobile layout when the two would overlap. */
+.main > .left { width: fit-content; margin: 0 auto; }
+.main > .panel { position: absolute; top: 10px; right: 14px; }
 
 /* ---------- tiles ---------- */
 .tile { display: inline-block; position: relative; line-height: 0; flex: none; border-radius: 4px; }
